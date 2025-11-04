@@ -1,0 +1,41 @@
+version: '3.8'
+services:
+  collector:
+    build: ./agents/collector
+    container_name: collector
+    ports:
+      - "8001:8001"
+    environment:
+      - NEWSAPI_KEY=${NEWSAPI_KEY}
+
+  classifier:
+    build: ./agents/classifier
+    container_name: classifier
+    ports:
+      - "8002:8002"
+
+  analyst:
+    build: ./agents/analyst
+    container_name: analyst
+    ports:
+      - "8003:8003"
+
+  supervisor:
+    build: ./supervisor
+    container_name: supervisor
+    ports:
+      - "8004:8004"
+    env_file:
+      - ./supervisor/.env
+    depends_on:
+      - collector
+      - classifier
+      - analyst
+
+  api:
+    build: ./api
+    container_name: news_curation_api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - supervisor

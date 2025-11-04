@@ -1,0 +1,17 @@
+nodes:
+  - id: collector
+    type: tool
+    tool_name: NewsCollector
+  - id: classifier
+    type: llm
+    model: gpt-4-turbo
+  - id: analyst
+    type: llm
+    model: gpt-4-turbo
+edges:
+  - source: collector
+    target: classifier
+  - source: classifier
+    target: analyst
+  - source: analyst
+    target: output

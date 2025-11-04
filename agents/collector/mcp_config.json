@@ -1,0 +1,5 @@
+{
+    "name": "collector",
+    "type": "http-tool",
+    "endpoint": "/fetch"
+}

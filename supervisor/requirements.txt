@@ -1,0 +1,5 @@
+fastapi>=0.95
+uvicorn[standard]>=0.21
+httpx>=0.24
+pyyaml>=6.0
+langsmith>=0.1
