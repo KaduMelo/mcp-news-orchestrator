@@ -1,12 +1,89 @@
+import os
 import logging
-from fastapi import FastAPI
-from pydantic import BaseModel
 from typing import List, Dict, Any
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.chains import LLMChain
+from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+from langchain.callbacks import LangSmithCallbackHandler
+from langsmith import Client
 
 LOG = logging.getLogger("analyst")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Agent - Analyst")
+
+# Initialize LangSmith (if configured)
+try:
+    if os.getenv("LANGCHAIN_API_KEY"):
+        langsmith_client = Client()
+        langsmith_callback = LangSmithCallbackHandler(
+            project_name=os.getenv("LANGCHAIN_PROJECT", "NewsCuration")
+        )
+        LOG.info("LangSmith tracing enabled")
+    else:
+        langsmith_callback = None
+        LOG.info("No LANGCHAIN_API_KEY set - running without tracing")
+except Exception as e:
+    LOG.warning("Failed to initialize LangSmith: %s", e)
+    langsmith_callback = None
+
+# Initialize LLM
+llm = ChatOpenAI(
+    model="gpt-4-1106-preview",  # or gpt-3.5-turbo for lower cost
+    temperature=0.1,  # Low temperature for consistent analysis
+)
+
+# Define output schema
+response_schemas = [
+    ResponseSchema(
+        name="sentiment",
+        description="The sentiment of the article (positive, negative, or neutral)"
+    ),
+    ResponseSchema(
+        name="score",
+        description="Sentiment score from -5 (very negative) to +5 (very positive)"
+    ),
+    ResponseSchema(
+        name="relevance",
+        description="How relevant/impactful this news is (high, medium, or low)"
+    ),
+    ResponseSchema(
+        name="reasoning",
+        description="Brief explanation of the analysis"
+    )
+]
+output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+
+# Define analysis prompt
+ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are an expert news analyst. Analyze the article's sentiment, impact, and relevance.
+    
+    {format_instructions}
+    
+    Consider:
+    - Overall tone and emotional impact
+    - Significance of the news
+    - Potential implications
+    - Factual vs emotional content
+    
+    Be consistent in scoring and categorization."""),
+    ("human", """Title: {title}
+    Category: {category}
+    Description: {description}
+    
+    Analyze this article's sentiment and relevance.""")
+])
+
+# Create the analysis chain
+analysis_chain = LLMChain(
+    llm=llm,
+    prompt=ANALYSIS_PROMPT,
+    verbose=True
+)
 
 
 class ArticleIn(BaseModel):
@@ -21,26 +98,61 @@ class ArticlesIn(BaseModel):
 
 @app.post("/analyze")
 async def analyze(payload: ArticlesIn) -> Dict[str, Any]:
-    """Do simple sentiment/relevance analysis (heuristic)"""
-    out = []
-    for a in payload.articles:
-        text = (a.title or "") + " " + (a.description or "")
-        score = 0
-        pos_words = ["good", "great", "innov", "grow", "positive", "success"]
-        neg_words = ["crisis", "drop", "bad", "problem", "loss"]
-        t = text.lower()
-        for w in pos_words:
-            if w in t:
-                score += 1
-        for w in neg_words:
-            if w in t:
-                score -= 1
-        sentiment = "neutral"
-        if score > 0:
-            sentiment = "positive"
-        elif score < 0:
-            sentiment = "negative"
-        out.append({"title": a.title, "category": a.category, "sentiment": sentiment, "score": score})
+    """Analyze articles using LangChain + GPT-4"""
+    try:
+        out = []
+        for idx, a in enumerate(payload.articles):
+            # Skip empty articles
+            if not a.title and not a.description:
+                continue
+
+            # Run analysis with tracing
+            response = analysis_chain.invoke(
+                {
+                    "title": a.title or "",
+                    "description": a.description or "",
+                    "category": a.category or "unknown",
+                    "format_instructions": output_parser.get_format_instructions()
+                },
+                config={
+                    "callbacks": [langsmith_callback] if langsmith_callback else None,
+                    "run_name": f"analyze_article_{idx+1}"
+                }
+            )
+
+            try:
+                parsed = output_parser.parse(response["text"])
+                # Ensure score is numeric
+                try:
+                    score = float(parsed["score"])
+                except (ValueError, TypeError):
+                    score = 0
+                
+                out.append({
+                    "title": a.title,
+                    "category": a.category,
+                    "sentiment": parsed["sentiment"].lower(),
+                    "score": score,
+                    "relevance": parsed["relevance"].lower(),
+                    "reasoning": parsed["reasoning"]
+                })
+            except Exception as parse_err:
+                LOG.error("Failed to parse LLM response: %s", parse_err)
+                # Fallback to simple result
+                out.append({
+                    "title": a.title,
+                    "category": a.category,
+                    "sentiment": "neutral",
+                    "score": 0,
+                    "relevance": "medium",
+                    "reasoning": "Failed to parse analysis"
+                })
+
+        return {"ok": True, "articles": out}
+
+    except Exception as e:
+        LOG.exception("Analysis failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {"ok": True, "articles": out}
 
