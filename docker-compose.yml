@@ -9,16 +9,34 @@ services:
       - NEWSAPI_KEY=${NEWSAPI_KEY}
 
   classifier:
-    build: ./agents/classifier
+    build:
+      context: ./agents/classifier
+      args:
+        - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+        - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
+        - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - OPENAI_MODEL=${OPENAI_MODEL}
     container_name: classifier
     ports:
       - "8002:8002"
+    env_file:
+      - ./supervisor/.env
 
   analyst:
-    build: ./agents/analyst
+    build:
+      context: ./agents/analyst
+      args:
+        - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+        - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
+        - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - OPENAI_MODEL=${OPENAI_MODEL}
     container_name: analyst
     ports:
       - "8003:8003"
+    env_file:
+      - ./supervisor/.env
 
   supervisor:
     build: ./supervisor
